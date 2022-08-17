@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import textwrap
+import urllib.parse
+import urllib.request
 
 from mkdocs_include_markdown_plugin import process
 
@@ -143,19 +145,31 @@ def get_file_content(
 
         arguments_string = match.group('arguments')
 
-        if os.path.isabs(filename):
-            file_path_glob = filename
+        # Check if filename is an URL
+        filename_is_url = False
+        if re.match(r'[a-zA-Z]{2,}:', filename):
+            filename_is_url = True
         else:
-            file_path_glob = os.path.join(
-                os.path.abspath(os.path.dirname(page_src_path)),
-                filename,
-            )
+            if os.path.isabs(filename):
+                file_path_glob = filename
+            else:
+                file_path_glob = os.path.join(
+                    os.path.abspath(os.path.dirname(page_src_path)),
+                    filename,
+                )
 
         exclude_match = re.search(
             ARGUMENT_REGEXES['exclude'],
             arguments_string,
         )
         if exclude_match is None:
+            ignore_paths = []
+        elif filename_is_url:
+            logger.error(
+                f"'exclude' argument in '{directive_name}' directive"
+                f' is not valid for URLs at'
+                f' {os.path.relpath(page_src_path, docs_dir)}:{lineno}',
+            )
             ignore_paths = []
         else:
             exclude_string = parse_string_argument(exclude_match)
@@ -182,10 +196,13 @@ def get_file_content(
                     )
                 ignore_paths = glob.glob(exclude_globstr)
 
-        file_paths_to_include = process.filter_paths(
-            glob.iglob(file_path_glob, recursive=True),
-            ignore_paths=ignore_paths,
-        )
+        if filename_is_url:
+            file_paths_to_include = [filename]
+        else:
+            file_paths_to_include = process.filter_paths(
+                glob.iglob(file_path_glob, recursive=True),
+                ignore_paths=ignore_paths,
+            )
 
         if not file_paths_to_include:
             lineno = lineno_from_content_start(
@@ -300,8 +317,12 @@ def get_file_content(
         # but they have been specified, so the warning(s) must be raised
         expected_but_any_found = [start is not None, end is not None]
         for file_path in file_paths_to_include:
-            with open(file_path, encoding='utf-8') as f:
-                new_text_to_include = f.read()
+            if filename_is_url:
+                with urllib.request.urlopen(file_path) as f:
+                    new_text_to_include = f.read().decode('utf-8')
+            else:
+                with open(file_path, encoding='utf-8') as f:
+                    new_text_to_include = f.read()
 
             if start is not None or end is not None:
                 new_text_to_include, *expected_not_found = (
@@ -330,8 +351,9 @@ def get_file_content(
                     new_text_to_include,
                 )
 
-            # relative URLs rewriting (only for 'include-markdown' directives)
-            if include_markdown and bool_options[
+            # relative URLs rewriting (only for 'include-markdown' directives
+            # and plain files (not for URLs))
+            if include_markdown and not filename_is_url and bool_options[
                 'rewrite-relative-urls'
             ]['value']:
                 new_text_to_include = process.rewrite_relative_urls(
