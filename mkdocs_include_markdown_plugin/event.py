@@ -318,8 +318,20 @@ def get_file_content(
         expected_but_any_found = [start is not None, end is not None]
         for file_path in file_paths_to_include:
             if filename_is_url:
-                with urllib.request.urlopen(file_path) as f:
-                    new_text_to_include = f.read().decode('utf-8')
+                try:
+                    with urllib.request.urlopen(file_path) as f:
+                        new_text_to_include = f.read().decode('utf-8')
+                except urllib.error.URLError as e:
+                    lineno = lineno_from_content_start(
+                        markdown,
+                        directive_match_start,
+                    )
+                    logger.error(
+                        f"Can't download '{file_path}' ({e})"
+                        f' at {os.path.relpath(page_src_path, docs_dir)}'
+                        f':{lineno}',
+                    )
+                    return ''
             else:
                 with open(file_path, encoding='utf-8') as f:
                     new_text_to_include = f.read()
